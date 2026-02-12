@@ -1,0 +1,16 @@
+CompileFlags:
+  Add:
+    - '-ferror-limit=0'
+    - '-Wno-implicit-int'
+    - '--target=arm-none-eabi'
+  Remove:
+    - '-mcpu=cortex-m4'
+    - '-mfpu=fpv4-sp-d16'
+    - '-mfloat-abi=hard'
+  CompilationDatabase: build/Debug
+Diagnostics:
+  Suppress:
+    - unused-includes
+    - unknown_typename
+    - unknown_typename_suggest
+    - typename_requires_specqual
