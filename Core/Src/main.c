@@ -43,16 +43,22 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-uint64_t volatile total_cycles = 0;
-uint32_t volatile last_cyccnt = 0;
 
 /* USER CODE BEGIN PV */
-
+uint64_t volatile total_cycles = 0;
+uint32_t volatile last_cyccnt = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+
+static uint8_t cmd_buf[64];
+static uint8_t cmd_idx = 0;
+
+extern volatile uint8_t rx_flag;
+extern uint8_t rx_buf[];
+extern uint32_t rx_len;
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -110,20 +116,57 @@ int main(void) {
   /* USER CODE BEGIN WHILE */
   while (1) {
 
-    uint32_t now = DWT->CYCCNT;
-    uint64_t cycles = total_cycles + (uint32_t)(now - last_cyccnt);
-    uint32_t secounds = (uint32_t)(cycles / 170000000ULL);
-    uint32_t hours = secounds / 3600;
-    uint32_t mins = (secounds % 3600) / 60;
-    uint32_t secs = secounds % 60;
+    if (rx_flag) {
 
-    char buf[128];
-    int len =
-        sprintf(buf, "Uptime : %lu:%02lu:%02lu\n HCLK Frequency  : %lu Hz \r\n",
-                hours, mins, secs, HAL_RCC_GetHCLKFreq());
+      rx_flag = 0;
+      for (uint32_t i = 0; i < rx_len; i++) {
+        uint8_t c = rx_buf[i];
 
-    CDC_Transmit_FS((uint8_t *)buf, len);
-    HAL_Delay(1000);
+        if (c == '\r' || c == '\n') {
+          cmd_buf[cmd_idx] = '\0';
+          char response[128];
+          int len = 0;
+
+          if (strcmp((char *)cmd_buf, "uptime") == 0) {
+            uint32_t now = DWT->CYCCNT;
+            uint64_t cycles = total_cycles + (uint32_t)(now - last_cyccnt);
+            uint32_t secounds = (uint32_t)(cycles / 170000000ULL);
+            len =
+                sprintf(response, "Uptime : %lu:%02lu:%02lu\n", secounds / 3600,
+                        (secounds % 3600) / 60, secounds % 60);
+          } else {
+            len = sprintf(response, "Unknown command: %s\n", cmd_buf);
+          }
+
+          if (len > 0) {
+            CDC_Transmit_FS((uint8_t *)response, len);
+          }
+          cmd_idx = 0;
+        } else if (c == 0xAA) {
+          uint8_t command = rx_buf[++i];
+          uint8_t data_len = rx_buf[++i];
+
+          switch (command) {
+
+          case 0x1: {
+            uint32_t now = DWT->CYCCNT;
+            uint64_t cycles = total_cycles + (uint32_t)(now - last_cyccnt);
+            uint32_t secounds = (uint32_t)(cycles / 170000000ULL);
+            char response[64];
+            int len =
+                sprintf(response, "Uptime : %lu:%02lu:%02lu\n", secounds / 3600,
+                        (secounds % 3600) / 60, secounds % 60);
+            CDC_Transmit_FS((uint8_t *)response, len);
+            break;
+          }
+          }
+        } else {
+          if (cmd_idx < sizeof(cmd_buf) - 1) {
+            cmd_buf[cmd_idx++] = c;
+          }
+        }
+      }
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
