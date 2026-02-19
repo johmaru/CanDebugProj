@@ -29,7 +29,13 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef void (*CommandHandler)(const char *args, char *response,
+                               int *response_size);
 
+typedef struct {
+  const char *command;
+  CommandHandler handler;
+} CommandEntry;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -65,6 +71,44 @@ extern uint32_t rx_len;
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+static void cmd_uptime(const char *args, char *response, int *response_size) {
+  uint32_t now = DWT->CYCCNT;
+  uint64_t cycles = total_cycles + (uint32_t)(now - last_cyccnt);
+  uint32_t secounds = (uint32_t)(cycles / 170000000ULL);
+  *response_size =
+      sprintf(response, "Uptime : %lu:%02lu:%02lu\n", secounds / 3600,
+              (secounds % 3600) / 60, secounds % 60);
+}
+
+static void cmd_help(const char *args, char *response, int *response_size) {
+  *response_size = sprintf(response, "Available commands:\n- uptime\n- help\n");
+}
+
+static const CommandEntry commands_table[] = {
+    {"uptime", cmd_uptime},
+    {"help", cmd_help},
+};
+
+#define COMMAND_COUNT (sizeof(commands_table) / sizeof(commands_table[0]))
+
+static void dispatch_command(const char *cmd_buf) {
+  char response[128];
+  int response_size = 0;
+
+  for (int i = 0; i < COMMAND_COUNT; i++) {
+    if (strcmp(cmd_buf, commands_table[i].command) == 0) {
+      commands_table[i].handler(NULL, response, &response_size);
+      if (response_size > 0) {
+        CDC_Transmit_FS((uint8_t *)response, response_size);
+      }
+      return;
+    }
+  }
+
+  response_size = sprintf(response, "Unknown command: %s\n", cmd_buf);
+  CDC_Transmit_FS((uint8_t *)response, response_size);
+}
 
 /* USER CODE END 0 */
 
@@ -124,24 +168,10 @@ int main(void) {
 
         if (c == '\r' || c == '\n') {
           cmd_buf[cmd_idx] = '\0';
-          char response[128];
-          int len = 0;
-
-          if (strcmp((char *)cmd_buf, "uptime") == 0) {
-            uint32_t now = DWT->CYCCNT;
-            uint64_t cycles = total_cycles + (uint32_t)(now - last_cyccnt);
-            uint32_t secounds = (uint32_t)(cycles / 170000000ULL);
-            len =
-                sprintf(response, "Uptime : %lu:%02lu:%02lu\n", secounds / 3600,
-                        (secounds % 3600) / 60, secounds % 60);
-          } else {
-            len = sprintf(response, "Unknown command: %s\n", cmd_buf);
+          if (cmd_idx > 0) {
+            dispatch_command((char *)cmd_buf);
+            cmd_idx = 0;
           }
-
-          if (len > 0) {
-            CDC_Transmit_FS((uint8_t *)response, len);
-          }
-          cmd_idx = 0;
         } else if (c == 0xAA) {
           uint8_t command = rx_buf[++i];
           uint8_t data_len = rx_buf[++i];

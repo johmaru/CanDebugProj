@@ -1,5 +1,6 @@
 use std::{
     io::{Read, Write},
+    result,
     sync::{LazyLock, Mutex},
     time::Duration,
 };
@@ -16,6 +17,7 @@ struct ToolsGUI {
     selected_port: Option<usize>,
     output: String,
     is_loading: bool,
+    result_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
 }
 
 impl ToolsGUI {
@@ -40,37 +42,56 @@ impl ToolsGUI {
             .map(|p| p.port_name.as_str())
     }
 
-    fn read_from_serial_port(&mut self, port_name: &str) -> Result<String, String> {
+    fn start_read_from_serial_port(&mut self, port_name: String, ctx: egui::Context) {
         self.is_loading = true;
+        self.output.clear();
 
-        let mut port = serialport::new(port_name, 115200)
-            .timeout(Duration::from_secs(1))
-            .open()
-            .map_err(|err| err.to_string())?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.result_rx = Some(rx);
 
-        std::thread::sleep(Duration::from_secs(2));
+        std::thread::spawn(move || {
+            let result = (|| -> Result<String, String> {
+                let mut port = serialport::new(port_name, 115200)
+                    .timeout(Duration::from_secs(1))
+                    .open()
+                    .map_err(|err| err.to_string())?;
 
-        let mut trash = [0u8; 256];
-        let _ = port.read(&mut trash);
+                std::thread::sleep(Duration::from_secs(2));
 
-        port.write_all(b"uptime\n").map_err(|err| err.to_string())?;
-        port.flush().map_err(|err| err.to_string())?;
+                let mut trash = [0u8; 256];
+                let _ = port.read(&mut trash);
 
-        std::thread::sleep(Duration::from_secs(1));
+                port.write_all(b"uptime\n").map_err(|err| err.to_string())?;
+                port.flush().map_err(|err| err.to_string())?;
 
-        let mut buf = [0u8; 128];
-        let n = port.read(&mut buf).map_err(|err| err.to_string())?;
+                std::thread::sleep(Duration::from_secs(1));
 
-        self.is_loading = false;
+                let mut buf = [0u8; 128];
+                let n = port.read(&mut buf).map_err(|err| err.to_string())?;
 
-        println!("Raw bytes: {:?}", &buf[..n]);
+                println!("Raw bytes: {:?}", &buf[..n]);
 
-        String::from_utf8(buf[..n].to_vec()).map_err(|err| err.to_string())
+                String::from_utf8(buf[..n].to_vec()).map_err(|err| err.to_string())
+            })();
+
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
     }
 }
 
 impl eframe::App for ToolsGUI {
     fn update(&mut self, _ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(rx) = &self.result_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.is_loading = false;
+                self.output = match result {
+                    Ok(s) => s,
+                    Err(e) => format!("Error: {}", e),
+                };
+            }
+        }
+
         egui::CentralPanel::default().show(_ctx, |ui| {
             ui.heading("Tools");
             if ui.button("Refresh").clicked() {
@@ -92,10 +113,7 @@ impl eframe::App for ToolsGUI {
 
             if ui.button("Read uptime").clicked() {
                 if let Some(name) = self.selected_port_name().map(str::to_string) {
-                    self.output = match self.read_from_serial_port(&name) {
-                        Ok(s) => s,
-                        Err(e) => format!("Error: {}", e),
-                    };
+                    self.start_read_from_serial_port(name, _ctx.clone());
                 }
             }
 
