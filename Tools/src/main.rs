@@ -10,19 +10,39 @@ use serialport::SerialPortInfo;
 
 static ENABLE_SERIAL_PORT: LazyLock<Mutex<Option<Vec<SerialPortInfo>>>> =
     LazyLock::new(|| Mutex::new(None));
+#[derive(Default)]
+struct Output {
+    content: String,
+    is_error: bool,
+    command: CommandType,
+}
 
 #[derive(Default)]
 struct ToolsGUI {
     ports: Vec<SerialPortInfo>,
     selected_port: Option<usize>,
-    output: String,
+    output: Output,
     is_loading: bool,
     result_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    show_help_window: bool,
+}
+
+#[derive(Clone, Copy)]
+enum CommandType {
+    Uptime,
+    Help,
+}
+
+impl Default for CommandType {
+    fn default() -> Self {
+        CommandType::Help
+    }
 }
 
 impl ToolsGUI {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut app = Self::default();
+        app.show_help_window = false;
         app
     }
 
@@ -42,9 +62,18 @@ impl ToolsGUI {
             .map(|p| p.port_name.as_str())
     }
 
-    fn start_read_from_serial_port(&mut self, port_name: String, ctx: egui::Context) {
+    fn start_read_from_serial_port(
+        &mut self,
+        port_name: String,
+        ctx: egui::Context,
+        command_type: CommandType,
+    ) {
         self.is_loading = true;
-        self.output.clear();
+        self.output = Output {
+            content: String::new(),
+            is_error: false,
+            command: command_type,
+        };
 
         let (tx, rx) = std::sync::mpsc::channel();
         self.result_rx = Some(rx);
@@ -61,7 +90,14 @@ impl ToolsGUI {
                 let mut trash = [0u8; 256];
                 let _ = port.read(&mut trash);
 
-                port.write_all(b"uptime\n").map_err(|err| err.to_string())?;
+                match command_type {
+                    CommandType::Uptime => {
+                        port.write_all(b"uptime\n").map_err(|err| err.to_string())?;
+                    }
+                    CommandType::Help => {
+                        port.write_all(b"help\n").map_err(|err| err.to_string())?;
+                    }
+                }
                 port.flush().map_err(|err| err.to_string())?;
 
                 std::thread::sleep(Duration::from_secs(1));
@@ -85,11 +121,33 @@ impl eframe::App for ToolsGUI {
         if let Some(rx) = &self.result_rx {
             if let Ok(result) = rx.try_recv() {
                 self.is_loading = false;
+                let command = self.output.command;
                 self.output = match result {
-                    Ok(s) => s,
-                    Err(e) => format!("Error: {}", e),
+                    Ok(s) => Output {
+                        content: s,
+                        is_error: false,
+                        command,
+                    },
+                    Err(e) => Output {
+                        content: format!("Error: {}", e),
+                        is_error: true,
+                        command,
+                    },
                 };
+
+                if matches!(command, CommandType::Help) {
+                    self.show_help_window = true;
+                }
             }
+        }
+
+        if self.show_help_window {
+            egui::Window::new("Help")
+                .open(&mut self.show_help_window)
+                .resizable(true)
+                .show(_ctx, |ui| {
+                    ui.label(&self.output.content);
+                });
         }
 
         egui::CentralPanel::default().show(_ctx, |ui| {
@@ -113,7 +171,13 @@ impl eframe::App for ToolsGUI {
 
             if ui.button("Read uptime").clicked() {
                 if let Some(name) = self.selected_port_name().map(str::to_string) {
-                    self.start_read_from_serial_port(name, _ctx.clone());
+                    self.start_read_from_serial_port(name, _ctx.clone(), CommandType::Uptime);
+                }
+            }
+
+            if ui.button("Help").clicked() {
+                if let Some(name) = self.selected_port_name().map(str::to_string) {
+                    self.start_read_from_serial_port(name, _ctx.clone(), CommandType::Help);
                 }
             }
 
@@ -121,11 +185,16 @@ impl eframe::App for ToolsGUI {
 
             let busy = self.is_loading;
 
-            if busy {
+            if !busy {
+                match self.output.command {
+                    CommandType::Uptime => {
+                        ui.label(format!("Uptime: {}", self.output.content));
+                    }
+                    CommandType::Help => {}
+                }
+            } else {
                 ui.spinner();
                 ui.label("Loading...");
-            } else {
-                ui.label(&self.output);
             }
         });
     }

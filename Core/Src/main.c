@@ -20,6 +20,7 @@
 #include "main.h"
 #include "usb_device.h"
 #include "usbd_cdc_if.h"
+#include <math.h>
 #include <stdint.h>
 
 /* Private includes ----------------------------------------------------------*/
@@ -53,9 +54,13 @@ typedef struct {
 /* USER CODE BEGIN PV */
 uint64_t volatile total_cycles = 0;
 uint32_t volatile last_cyccnt = 0;
+static const float_t VERSION = 0.1f;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
+
+/* USER CODE BEGIN PFP */
+
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 
@@ -65,7 +70,6 @@ static uint8_t cmd_idx = 0;
 extern volatile uint8_t rx_flag;
 extern uint8_t rx_buf[];
 extern uint32_t rx_len;
-/* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
@@ -82,12 +86,21 @@ static void cmd_uptime(const char *args, char *response, int *response_size) {
 }
 
 static void cmd_help(const char *args, char *response, int *response_size) {
-  *response_size = sprintf(response, "Available commands:\n- uptime\n- help\n");
+  //! TODO: feature: from the command_table, generate the help message
+  //! automatically
+
+  *response_size =
+      sprintf(response, "Available commands:\n- uptime\n- help\n- version\n");
+}
+
+static void cmd_version(const char *args, char *response, int *response_size) {
+  *response_size = sprintf(response, "Firmware version: %.2f\n", VERSION);
 }
 
 static const CommandEntry commands_table[] = {
     {"uptime", cmd_uptime},
     {"help", cmd_help},
+    {"version", cmd_version},
 };
 
 #define COMMAND_COUNT (sizeof(commands_table) / sizeof(commands_table[0]))
@@ -173,6 +186,8 @@ int main(void) {
             cmd_idx = 0;
           }
         } else if (c == 0xAA) {
+          // Currently unused, reserved for future binary protocol
+
           uint8_t command = rx_buf[++i];
           uint8_t data_len = rx_buf[++i];
 
